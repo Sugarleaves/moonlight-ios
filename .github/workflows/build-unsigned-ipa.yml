@@ -70,7 +70,7 @@ jobs:
           plutil -lint "$PLIST"
           test "$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$PLIST")" = 'iPhoneOS'
           plutil -extract UIDeviceFamily json -o - "$PLIST" | grep -q '2'
-          lipo -verify_arch arm64 "$EXECUTABLE"
+          lipo "$EXECUTABLE" -verify_arch arm64
           nm -gj "$EXECUTABLE" | grep -q '_OBJC_CLASS_\$_DesktopTouchHandler'
           find "$APP_PATH" -name '*v1.11*' -print -quit | grep -q 'v1.11'
           test ! -d "$APP_PATH/_CodeSignature"
