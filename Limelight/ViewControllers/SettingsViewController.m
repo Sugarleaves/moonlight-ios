@@ -293,7 +293,8 @@ BOOL isCustomResolution(CGSize res) {
     [self.framerateSelector setSelectedSegmentIndex:framerate];
     [self.framerateSelector addTarget:self action:@selector(updateBitrate) forControlEvents:UIControlEventValueChanged];
     [self.onscreenControlSelector setSelectedSegmentIndex:onscreenControls];
-    [self.onscreenControlSelector setEnabled:!currentSettings.absoluteTouchMode && !currentSettings.desktopTouchMode];
+    [self.onscreenControlSelector setEnabled:!currentSettings.absoluteTouchMode &&
+                                                   !(desktopModeAvailable && currentSettings.desktopTouchMode)];
     [self.bitrateSlider setMinimumValue:0];
     [self.bitrateSlider setMaximumValue:(sizeof(bitrateTable) / sizeof(*bitrateTable)) - 1];
     [self.bitrateSlider setValue:[self getSliderValueForBitrate:_bitrate] animated:YES];

@@ -361,7 +361,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
 - (void)openKeyboardForRemoteFocus:(BOOL)forRemoteFocus {
     if (isInputingText) {
-        keyboardOpenedForRemoteFocus = keyboardOpenedForRemoteFocus || forRemoteFocus;
+        // A host focus event must not take ownership of a keyboard that the
+        // user opened manually, otherwise host focus loss would close it.
         return;
     }
 
@@ -386,9 +387,14 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     [keyInputField removeTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
     [keyInputField addTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
     [keyInputField.undoManager disableUndoRegistration];
-    [keyInputField becomeFirstResponder];
-    isInputingText = YES;
-    keyboardOpenedForRemoteFocus = forRemoteFocus;
+    if ([keyInputField becomeFirstResponder]) {
+        isInputingText = YES;
+        keyboardOpenedForRemoteFocus = forRemoteFocus;
+    } else {
+        Log(LOG_W, @"Unable to open the software keyboard");
+        isInputingText = NO;
+        keyboardOpenedForRemoteFocus = NO;
+    }
 }
 
 - (void)closeKeyboardManually:(BOOL)manual {
@@ -839,6 +845,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     }
     [keysDown removeAllObjects];
     isInputingText = NO;
+    keyboardOpenedForRemoteFocus = NO;
 }
 
 - (void)onKeyboardPressed:(UITextField *)textField {

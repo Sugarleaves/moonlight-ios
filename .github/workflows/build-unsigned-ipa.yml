@@ -1,4 +1,4 @@
-name: Build unsigned iPad IPA
+name: Build and audit unsigned iPad IPA
 
 on:
   workflow_dispatch:
@@ -26,8 +26,24 @@ jobs:
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project Moonlight.xcodeproj
 
+      - name: Run Xcode static analyzer
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Moonlight.xcodeproj \
+            -target Moonlight \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$RUNNER_TEMP/AnalyzeBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            analyze | tee "$RUNNER_TEMP/xcode-analyze.log"
+
       - name: Build unsigned device application
         run: |
+          set -o pipefail
           xcodebuild \
             -project Moonlight.xcodeproj \
             -target Moonlight \
@@ -39,7 +55,76 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
             DEVELOPMENT_TEAM='' \
-            build
+            build | tee "$RUNNER_TEMP/xcode-build.log"
+
+      - name: Reject warnings in Desktop Touch code
+        run: |
+          if grep -E '(DesktopTouchHandler|StreamView|SettingsViewController|ControllerSupport|ControlStream|PlatformSockets)\.(m|c|h):[0-9]+:[0-9]+: warning:' \
+              "$RUNNER_TEMP/xcode-analyze.log" "$RUNNER_TEMP/xcode-build.log"; then
+            echo 'Desktop Touch code produced compiler or analyzer warnings.' >&2
+            exit 1
+          fi
+
+      - name: Validate device application
+        run: |
+          APP_PATH="$RUNNER_TEMP/Build/Release-iphoneos/Moonlight.app"
+          EXECUTABLE="$APP_PATH/Moonlight"
+          PLIST="$APP_PATH/Info.plist"
+          test -x "$EXECUTABLE"
+          plutil -lint "$PLIST"
+          test "$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$PLIST")" = 'iPhoneOS'
+          plutil -extract UIDeviceFamily json -o - "$PLIST" | grep -q '2'
+          lipo -verify_arch arm64 "$EXECUTABLE"
+          nm -gj "$EXECUTABLE" | grep -q '_OBJC_CLASS_\$_DesktopTouchHandler'
+          find "$APP_PATH" -name '*v1.11*' -print -quit | grep -q 'v1.11'
+          test ! -d "$APP_PATH/_CodeSignature"
+          otool -L "$EXECUTABLE"
+
+      - name: Build iPad simulator application
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Moonlight.xcodeproj \
+            -target Moonlight \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            SYMROOT="$RUNNER_TEMP/SimulatorBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee "$RUNNER_TEMP/xcode-simulator-build.log"
+
+      - name: Install and launch in iPad simulator
+        run: |
+          APP_PATH="$RUNNER_TEMP/SimulatorBuild/Debug-iphonesimulator/Moonlight.app"
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for devices in data["devices"].values():
+              for device in devices:
+                  if device["isAvailable"] and device["name"].startswith("iPad"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPad simulator")
+          ')
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+          LAUNCH_OUTPUT=$(xcrun simctl launch "$DEVICE_ID" com.moonlight-stream.Moonlight)
+          echo "$LAUNCH_OUTPUT"
+          sleep 5
+          xcrun simctl io "$DEVICE_ID" screenshot "$RUNNER_TEMP/ipad-launch.png"
+          xcrun simctl terminate "$DEVICE_ID" com.moonlight-stream.Moonlight
+
+      - name: Upload audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-Desktop-Touch-audit
+          path: |
+            ${{ runner.temp }}/xcode-analyze.log
+            ${{ runner.temp }}/xcode-build.log
+            ${{ runner.temp }}/xcode-simulator-build.log
+            ${{ runner.temp }}/ipad-launch.png
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Package IPA
         run: |
