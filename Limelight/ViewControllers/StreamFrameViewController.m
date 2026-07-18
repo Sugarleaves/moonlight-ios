@@ -306,6 +306,7 @@
 }
 
 - (void) returnToMainFrame {
+    [_streamView cancelActiveTouchInput];
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
     
@@ -317,6 +318,7 @@
 
 // This will fire if the user opens control center or gets a low battery message
 - (void)applicationWillResignActive:(NSNotification *)notification {
+    [_streamView cancelActiveTouchInput];
     if (_inactivityTimer != nil) {
         [_inactivityTimer invalidate];
     }
@@ -556,6 +558,10 @@
     Log(LOG_I, @"Set controller LED on gamepad %d: l%02x%02x%02x", controllerNumber, r, g, b);
     
     [_controllerSupport setControllerLed:controllerNumber r:r g:g b:b];
+}
+
+- (void)setTextInputFocus:(BOOL)focused {
+    [_streamView setRemoteTextInputFocused:focused];
 }
 
 - (void)connectionStatusUpdate:(int)status {

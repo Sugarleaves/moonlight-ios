@@ -67,6 +67,8 @@
                        enableHdr:(BOOL)enableHdr
                   btMouseSupport:(BOOL)btMouseSupport
                absoluteTouchMode:(BOOL)absoluteTouchMode
+                 desktopTouchMode:(BOOL)desktopTouchMode
+       experimentalNativeTouchMode:(BOOL)experimentalNativeTouchMode
                     statsOverlay:(BOOL)statsOverlay {
     
     [_managedObjectContext performBlockAndWait:^{
@@ -86,6 +88,8 @@
         settingsToSave.enableHdr = enableHdr;
         settingsToSave.btMouseSupport = btMouseSupport;
         settingsToSave.absoluteTouchMode = absoluteTouchMode;
+        settingsToSave.desktopTouchMode = desktopTouchMode;
+        settingsToSave.experimentalNativeTouchMode = experimentalNativeTouchMode;
         settingsToSave.statsOverlay = statsOverlay;
         
         [self saveData];

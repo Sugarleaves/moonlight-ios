@@ -16,6 +16,8 @@
 @implementation SettingsViewController {
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
+    UILabel *_nativeTouchLabel;
+    UISegmentedControl *_nativeTouchSelector;
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -136,6 +138,39 @@ BOOL isCustomResolution(CGSize res) {
     
     DataManager* dataMan = [[DataManager alloc] init];
     TemporarySettings* currentSettings = [dataMan getSettings];
+
+#if !TARGET_OS_TV
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        [self.touchModeSelector insertSegmentWithTitle:@"Desktop" atIndex:2 animated:NO];
+
+        const CGFloat addedHeight = 64.0;
+        const CGFloat insertionY = CGRectGetMaxY(self.touchModeSelector.frame) + 8.0;
+        for (UIView *subview in self.scrollView.subviews) {
+            if (subview != self.touchModeSelector && CGRectGetMinY(subview.frame) >= insertionY) {
+                CGRect frame = subview.frame;
+                frame.origin.y += addedHeight;
+                subview.frame = frame;
+            }
+        }
+
+        _nativeTouchLabel = [[UILabel alloc] initWithFrame:CGRectMake(self.touchModeSelector.frame.origin.x,
+                                                                      insertionY,
+                                                                      self.touchModeSelector.frame.size.width,
+                                                                      21.0)];
+        _nativeTouchLabel.text = @"Native Touch (Experimental)";
+        _nativeTouchLabel.textColor = [UIColor colorWithRed:0.939 green:0.963 blue:1.0 alpha:1.0];
+        _nativeTouchLabel.font = [UIFont systemFontOfSize:17.0];
+        [self.scrollView addSubview:_nativeTouchLabel];
+
+        _nativeTouchSelector = [[UISegmentedControl alloc] initWithItems:@[@"Off", @"On"]];
+        _nativeTouchSelector.frame = CGRectMake(self.touchModeSelector.frame.origin.x,
+                                                CGRectGetMaxY(_nativeTouchLabel.frame) + 4.0,
+                                                self.touchModeSelector.frame.size.width,
+                                                self.touchModeSelector.frame.size.height);
+        _nativeTouchSelector.selectedSegmentIndex = currentSettings.experimentalNativeTouchMode ? 1 : 0;
+        [self.scrollView addSubview:_nativeTouchSelector];
+    }
+#endif
     
     // Ensure we pick a bitrate that falls exactly onto a slider notch
     _bitrate = bitrateTable[[self getSliderValueForBitrate:[currentSettings.bitrate intValue]]];
@@ -240,8 +275,10 @@ BOOL isCustomResolution(CGSize res) {
         [self.hdrSelector setSelectedSegmentIndex:currentSettings.enableHdr ? 1 : 0];
     }
     
-    [self.touchModeSelector setSelectedSegmentIndex:currentSettings.absoluteTouchMode ? 1 : 0];
+    BOOL desktopModeAvailable = self.touchModeSelector.numberOfSegments > 2;
+    [self.touchModeSelector setSelectedSegmentIndex:(desktopModeAvailable && currentSettings.desktopTouchMode) ? 2 : (currentSettings.absoluteTouchMode ? 1 : 0)];
     [self.touchModeSelector addTarget:self action:@selector(touchModeChanged) forControlEvents:UIControlEventValueChanged];
+    [_nativeTouchSelector setEnabled:self.touchModeSelector.selectedSegmentIndex == 2];
     [self.statsOverlaySelector setSelectedSegmentIndex:currentSettings.statsOverlay ? 1 : 0];
     [self.btMouseSelector setSelectedSegmentIndex:currentSettings.btMouseSupport ? 1 : 0];
     [self.optimizeSettingsSelector setSelectedSegmentIndex:currentSettings.optimizeGames ? 1 : 0];
@@ -256,7 +293,7 @@ BOOL isCustomResolution(CGSize res) {
     [self.framerateSelector setSelectedSegmentIndex:framerate];
     [self.framerateSelector addTarget:self action:@selector(updateBitrate) forControlEvents:UIControlEventValueChanged];
     [self.onscreenControlSelector setSelectedSegmentIndex:onscreenControls];
-    [self.onscreenControlSelector setEnabled:!currentSettings.absoluteTouchMode];
+    [self.onscreenControlSelector setEnabled:!currentSettings.absoluteTouchMode && !currentSettings.desktopTouchMode];
     [self.bitrateSlider setMinimumValue:0];
     [self.bitrateSlider setMaximumValue:(sizeof(bitrateTable) / sizeof(*bitrateTable)) - 1];
     [self.bitrateSlider setValue:[self getSliderValueForBitrate:_bitrate] animated:YES];
@@ -266,8 +303,9 @@ BOOL isCustomResolution(CGSize res) {
 }
 
 - (void) touchModeChanged {
-    // Disable on-screen controls in absolute touch mode
+    // Direct and desktop modes use the full stream surface for input.
     [self.onscreenControlSelector setEnabled:[self.touchModeSelector selectedSegmentIndex] == 0];
+    [_nativeTouchSelector setEnabled:[self.touchModeSelector selectedSegmentIndex] == 2];
 }
 
 - (void) updateBitrate {
@@ -536,6 +574,8 @@ BOOL isCustomResolution(CGSize res) {
     BOOL btMouseSupport = [self.btMouseSelector selectedSegmentIndex] == 1;
     BOOL useFramePacing = [self.framePacingSelector selectedSegmentIndex] == 1;
     BOOL absoluteTouchMode = [self.touchModeSelector selectedSegmentIndex] == 1;
+    BOOL desktopTouchMode = self.touchModeSelector.numberOfSegments > 2 && [self.touchModeSelector selectedSegmentIndex] == 2;
+    BOOL experimentalNativeTouchMode = desktopTouchMode && [_nativeTouchSelector selectedSegmentIndex] == 1;
     BOOL statsOverlay = [self.statsOverlaySelector selectedSegmentIndex] == 1;
     BOOL enableHdr = [self.hdrSelector selectedSegmentIndex] == 1;
     [dataMan saveSettingsWithBitrate:_bitrate
@@ -553,6 +593,8 @@ BOOL isCustomResolution(CGSize res) {
                            enableHdr:enableHdr
                       btMouseSupport:btMouseSupport
                    absoluteTouchMode:absoluteTouchMode
+                     desktopTouchMode:desktopTouchMode
+           experimentalNativeTouchMode:experimentalNativeTouchMode
                         statsOverlay:statsOverlay];
 }
 

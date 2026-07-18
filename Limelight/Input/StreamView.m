@@ -13,6 +13,7 @@
 #import "KeyboardSupport.h"
 #import "RelativeTouchHandler.h"
 #import "AbsoluteTouchHandler.h"
+#import "DesktopTouchHandler.h"
 #import "KeyboardInputField.h"
 
 static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
@@ -22,6 +23,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     
     KeyboardInputField* keyInputField;
     BOOL isInputingText;
+    BOOL desktopTouchMode;
+    BOOL remoteTextInputFocused;
+    BOOL remoteTextInputSuppressed;
+    BOOL keyboardOpenedForRemoteFocus;
     NSMutableSet* keysDown;
     
     float streamAspectRatio;
@@ -67,7 +72,12 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     self->touchHandler = [[RelativeTouchHandler alloc] initWithView:self];
 #else
     // iOS uses RelativeTouchHandler or AbsoluteTouchHandler depending on user preference
-    if (settings.absoluteTouchMode) {
+    desktopTouchMode = settings.desktopTouchMode && UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
+    if (desktopTouchMode) {
+        self->touchHandler = [[DesktopTouchHandler alloc] initWithView:self
+                                                  nativeTouchRequested:settings.experimentalNativeTouchMode];
+    }
+    else if (settings.absoluteTouchMode) {
         self->touchHandler = [[AbsoluteTouchHandler alloc] initWithView:self];
     }
     else {
@@ -76,8 +86,8 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     
     onScreenControls = [[OnScreenControls alloc] initWithView:self controllerSup:controllerSupport streamConfig:streamConfig];
     OnScreenControlsLevel level = (OnScreenControlsLevel)[settings.onscreenControls integerValue];
-    if (settings.absoluteTouchMode) {
-        Log(LOG_I, @"On-screen controls disabled in absolute touch mode");
+    if (settings.absoluteTouchMode || desktopTouchMode) {
+        Log(LOG_I, @"On-screen controls disabled in direct/desktop touch mode");
         [onScreenControls setLevel:OnScreenControlsLevelOff];
     }
     else if (level == OnScreenControlsLevelAuto) {
@@ -219,6 +229,37 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
                        MIN(MAX(y, videoOrigin.y), videoOrigin.y + videoSize.height) - videoOrigin.y);
 }
 
+- (CGPoint) normalizedVideoCoordinatesForPoint:(CGPoint)point {
+    CGPoint videoPoint = [self adjustCoordinatesForVideoArea:point];
+    CGSize videoSize = [self getVideoAreaSize];
+    return CGPointMake(videoSize.width > 0 ? videoPoint.x / videoSize.width : 0,
+                       videoSize.height > 0 ? videoPoint.y / videoSize.height : 0);
+}
+
+- (void)cancelActiveTouchInput {
+    if ([touchHandler isKindOfClass:[DesktopTouchHandler class]]) {
+        [(DesktopTouchHandler *)touchHandler cancelAllInput];
+    }
+}
+
+- (void)setRemoteTextInputFocused:(BOOL)focused {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->remoteTextInputFocused == focused) {
+            return;
+        }
+
+        self->remoteTextInputFocused = focused;
+        if (!focused) {
+            self->remoteTextInputSuppressed = NO;
+            if (self->keyboardOpenedForRemoteFocus) {
+                [self closeKeyboardManually:NO];
+            }
+        } else if (self->desktopTouchMode && !self->remoteTextInputSuppressed) {
+            [self openKeyboardForRemoteFocus:YES];
+        }
+    });
+}
+
 #if !TARGET_OS_TV
 
 - (uint16_t)getRotationFromAzimuthAngle:(float)azimuthAngle {
@@ -318,6 +359,47 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 
 #endif
 
+- (void)openKeyboardForRemoteFocus:(BOOL)forRemoteFocus {
+    if (isInputingText) {
+        keyboardOpenedForRemoteFocus = keyboardOpenedForRemoteFocus || forRemoteFocus;
+        return;
+    }
+
+    Log(LOG_D, forRemoteFocus ? @"Opening keyboard for remote text focus" : @"Opening keyboard");
+    keyInputField.delegate = self;
+    keyInputField.text = @"0";
+#if !TARGET_OS_TV
+    UIToolbar *customToolbarView = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.bounds.size.width, 44)];
+    UIBarButtonItem *doneBarButton = [self createButtonWithImageNamed:@"DoneIcon.png" backgroundColor:[UIColor clearColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x00 isToggleable:NO];
+    UIBarButtonItem *windowsBarButton = [self createButtonWithImageNamed:@"WindowsIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x5B isToggleable:YES];
+    UIBarButtonItem *tabBarButton = [self createButtonWithImageNamed:@"TabIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x09 isToggleable:NO];
+    UIBarButtonItem *shiftBarButton = [self createButtonWithImageNamed:@"ShiftIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA0 isToggleable:YES];
+    UIBarButtonItem *escapeBarButton = [self createButtonWithImageNamed:@"EscapeIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x1B isToggleable:NO];
+    UIBarButtonItem *controlBarButton = [self createButtonWithImageNamed:@"ControlIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA2 isToggleable:YES];
+    UIBarButtonItem *altBarButton = [self createButtonWithImageNamed:@"AltIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA4 isToggleable:YES];
+    UIBarButtonItem *deleteBarButton = [self createButtonWithImageNamed:@"DeleteIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x2E isToggleable:NO];
+    UIBarButtonItem *flexibleSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    [customToolbarView setItems:@[doneBarButton, windowsBarButton, escapeBarButton, tabBarButton,
+                                  shiftBarButton, controlBarButton, altBarButton, deleteBarButton, flexibleSpace]];
+    keyInputField.inputAccessoryView = customToolbarView;
+#endif
+    [keyInputField removeTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
+    [keyInputField addTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
+    [keyInputField.undoManager disableUndoRegistration];
+    [keyInputField becomeFirstResponder];
+    isInputingText = YES;
+    keyboardOpenedForRemoteFocus = forRemoteFocus;
+}
+
+- (void)closeKeyboardManually:(BOOL)manual {
+    if (manual && remoteTextInputFocused) {
+        remoteTextInputSuppressed = YES;
+    }
+    [keyInputField resignFirstResponder];
+    isInputingText = NO;
+    keyboardOpenedForRemoteFocus = NO;
+}
+
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
     if ([self handleMouseButtonEvent:BUTTON_ACTION_PRESS
                           forTouches:touches
@@ -354,37 +436,10 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
         if ([[event allTouches] count] == 3) {
             if (isInputingText) {
                 Log(LOG_D, @"Closing the keyboard");
-                [keyInputField resignFirstResponder];
-                isInputingText = false;
+                [self closeKeyboardManually:YES];
             } else {
-                Log(LOG_D, @"Opening the keyboard");
-                // Prepare the textbox used to capture keyboard events.
-                keyInputField.delegate = self;
-                keyInputField.text = @"0";
-#if !TARGET_OS_TV
-                // Prepare the toolbar above the keyboard for more options
-                UIToolbar *customToolbarView = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.bounds.size.width, 44)];
-                
-                UIBarButtonItem *doneBarButton = [self createButtonWithImageNamed:@"DoneIcon.png" backgroundColor:[UIColor clearColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x00 isToggleable:NO];
-                UIBarButtonItem *windowsBarButton = [self createButtonWithImageNamed:@"WindowsIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x5B isToggleable:YES];
-                UIBarButtonItem *tabBarButton = [self createButtonWithImageNamed:@"TabIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x09 isToggleable:NO];
-                UIBarButtonItem *shiftBarButton = [self createButtonWithImageNamed:@"ShiftIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA0 isToggleable:YES];
-                UIBarButtonItem *escapeBarButton = [self createButtonWithImageNamed:@"EscapeIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x1B isToggleable:NO];
-                UIBarButtonItem *controlBarButton = [self createButtonWithImageNamed:@"ControlIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA2 isToggleable:YES];
-                UIBarButtonItem *altBarButton = [self createButtonWithImageNamed:@"AltIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0xA4 isToggleable:YES];
-                UIBarButtonItem *deleteBarButton = [self createButtonWithImageNamed:@"DeleteIcon.png" backgroundColor:[UIColor blackColor] target:self action:@selector(toolbarButtonClicked:) keyCode:0x2E isToggleable:NO];
-                UIBarButtonItem *flexibleSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-                
-                [customToolbarView setItems:[NSArray arrayWithObjects:doneBarButton, windowsBarButton, escapeBarButton, tabBarButton, shiftBarButton, controlBarButton, altBarButton, deleteBarButton, flexibleSpace, nil]];
-                keyInputField.inputAccessoryView = customToolbarView;
-#endif
-                [keyInputField becomeFirstResponder];
-                [keyInputField addTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
-                
-                // Undo causes issues for our state management, so turn it off
-                [keyInputField.undoManager disableUndoRegistration];
-                
-                isInputingText = true;
+                remoteTextInputSuppressed = NO;
+                [self openKeyboardForRemoteFocus:NO];
             }
         }
     }
@@ -425,8 +480,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     short keyCode = [objc_getAssociatedObject(sender, "keyCode") shortValue];
     // Close keyboard if done button clicked
     if (!keyCode) {
-        [keyInputField resignFirstResponder];
-        isInputingText = false;
+        [self closeKeyboardManually:YES];
     }
     else {
         // Send key press event using keyCode parameter, toggle if necessary
@@ -784,6 +838,7 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
         LiSendKeyboardEvent([keyCode shortValue], KEY_ACTION_UP, 0);
     }
     [keysDown removeAllObjects];
+    isInputingText = NO;
 }
 
 - (void)onKeyboardPressed:(UITextField *)textField {
