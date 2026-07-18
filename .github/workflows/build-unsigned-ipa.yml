@@ -2,6 +2,11 @@ name: Build unsigned iPad IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - desktop-touch-mode
+    paths:
+      - .github/workflows/build-unsigned-ipa.yml
 
 permissions:
   contents: read
